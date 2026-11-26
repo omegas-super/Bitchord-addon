@@ -1,0 +1,24 @@
+services:
+  bitchord-tido-addon:
+    build: .
+    # image: local build; or publish your own like the upstream addon
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - PORT=8080
+      - DATA_DIR=/data
+      - LOG_LEVEL=info
+      # Optional pre-seed; everything is also editable on /setup
+      # - TIDO_URL=https://tido.tido.tido.rickyaddons.dpdns.org/<token>/manifest.json
+      # - HIFI_API_URLS=https://my-hifi-api.example.com
+      # - AUDIO_QUALITY=MAX
+    restart: unless-stopped
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: replace-with-your-reverse-proxy-network

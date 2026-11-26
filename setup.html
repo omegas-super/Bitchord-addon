@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bitdo — Tido × BitChord addon</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b23; --panel2: #1c232e; --line: #2a3342;
+    --text: #e7edf5; --muted: #8b98a9; --accent: #6ee7c8; --accent2: #4cc2a3;
+    --danger: #ff7a7a; --warn: #ffcc66; --ok: #7ee08a; --code: #12161d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: clamp(14px, 4vw, 32px); }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 10px; flex: none;
+    background: linear-gradient(135deg, #1f8a70, #6ee7c8);
+    display: grid; place-items: center; color: #06231b; font-weight: 800; font-size: 20px;
+  }
+  header h1 { font-size: clamp(18px, 4vw, 24px); margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; width: 100%; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: clamp(14px, 3vw, 22px); margin-bottom: 16px;
+  }
+  .card h2 { margin: 0 0 6px; font-size: 16px; }
+  .card p.hint { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  input[type=text], input[type=password], input[type=url], select, textarea {
+    width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--code); color: var(--text); font: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent2); border-color: transparent; }
+  textarea { min-height: 84px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 200px; min-width: 0; }
+  .toggle { display: flex; align-items: center; gap: 10px; margin: 12px 0; cursor: pointer; user-select: none; }
+  .toggle input { width: 18px; height: 18px; accent-color: var(--accent2); }
+  .toggle span { font-size: 14px; }
+  button {
+    padding: 10px 18px; border-radius: 8px; border: 0; cursor: pointer;
+    background: var(--accent2); color: #052a20; font-weight: 700; font: inherit;
+  }
+  button:hover { background: var(--accent); }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.small { padding: 6px 12px; font-size: 13px; }
+  .linkbox {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  }
+  .linkbox code {
+    flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; color: var(--accent);
+    font-family: ui-monospace, monospace; font-size: 13px;
+  }
+  .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+  .ok { background: var(--ok); } .down { background: var(--danger); } .slow { background: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  th { color: var(--muted); font-weight: 600; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.good { color: var(--ok); border-color: var(--ok); }
+  .pill.bad { color: var(--danger); border-color: var(--danger); }
+  .msg { margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 13px; display: none; }
+  .msg.ok { display: block; background: rgba(126, 224, 138, .12); color: var(--ok); }
+  .msg.err { display: block; background: rgba(255, 122, 122, .12); color: var(--danger); }
+  .msg code { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; margin: 24px 0 8px; }
+  .hidden { display: none !important; }
+  #login { max-width: 400px; margin: 8vh auto 0; }
+  .tester-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .artwork { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; background: var(--panel2); vertical-align: middle; }
+  @media (max-width: 640px) {
+    .row > div { flex-basis: 100%; }
+    th, td { padding: 6px 4px; }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="login" class="card">
+    <header style="margin-bottom:10px">
+      <div class="logo">♪</div>
+      <div>
+        <h1>Bitdo</h1>
+        <div class="sub">Tido / Tidal Hi-Res for BitChord — setup</div>
+      </div>
+    </header>
+    <p class="hint" id="loginHint">Set the password that protects this page. Anyone with it can change the addon, so pick something real.</p>
+    <label for="pw">Password</label>
+    <input type="password" id="pw" autocomplete="current-password" placeholder="••••••••">
+    <div style="margin-top:14px"><button id="loginBtn">Sign in</button></div>
+    <div id="loginMsg" class="msg"></div>
+  </div>
+
+  <div id="dash" class="hidden">
+    <header>
+      <div class="logo">♪</div>
+      <div>
+        <h1>Bitdo — Tido × BitChord</h1>
+        <div class="sub" id="subTitle">Self-hosted Tidal source for BitChord</div>
+      </div>
+      <div style="margin-left:auto"><button class="ghost small" id="logoutBtn">Sign out</button></div>
+    </header>
+
+    <div class="card">
+      <h2>BitChord source link</h2>
+      <p class="hint">Paste this under <b>Sources</b> in BitChord (drag it to the top so it wins over built-in sources). It contains your secret — treat it like a password.</p>
+      <div class="linkbox">
+        <code id="link">…</code>
+        <button class="small" id="copyBtn">Copy</button>
+        <button class="small ghost" id="rotateBtn">Rotate secret</button>
+      </div>
+      <label for="label">Display name (shown in BitChord)</label>
+      <input type="text" id="label" maxlength="64" placeholder="Tido Tidal Hi-Res">
+      <label for="publicUrl">Public URL (leave blank to auto-detect from requests)</label>
+      <input type="url" id="publicUrl" placeholder="https://your-app.onrender.com">
+    </div>
+
+    <div class="card">
+      <h2>Backends</h2>
+      <p class="hint">Tried top to bottom with automatic failover. Your Tido link first (paste the whole manifest URL with its token), then any hifi-api instances — your own self-hosted one is the most reliable (<b>docs/hifi-api.md</b>).</p>
+      <label for="tidoUrl">Tido manifest URL</label>
+      <input type="url" id="tidoUrl" placeholder="https://tido.tido.tido.rickyaddons.dpdns.org/<token>/manifest.json">
+      <label for="tidoRegenUrl">Tido manifest generator URL (optional — enables auto-rotation)</label>
+      <input type="text" id="tidoRegenUrl" placeholder="https://tido.tido.tido.rickyaddons.dpdns.org/generate?k=<key>">
+      <p class="hint">When Tido starts failing, the addon POSTs this URL and adopts the fresh manifest automatically (rate-limited to once every 10 min). It cannot help while the whole Tido upstream is down — then failover carries requests instead.</p>
+      <div style="margin-top:6px"><button class="small" id="regenBtn">Regenerate manifest now</button></div>
+      <label for="hifiUrls">hifi-api instances (one URL per line)</label>
+      <textarea id="hifiUrls" placeholder="https://my-hifi-api.example.com"></textarea>
+      <label class="toggle"><input type="checkbox" id="monoEnabled"><span>Monochrome tracks backend (tracks.monochrome.st — free lossless FLAC, built-in always-on fallback)</span></label>
+      <label for="monoUrl">Monochrome API URL</label>
+      <input type="url" id="monoUrl" placeholder="https://tracks.monochrome.st">
+      <div class="grid2" style="margin-top:8px">
+        <div>
+          <label for="quality">Audio quality</label>
+          <select id="quality">
+            <option value="MAX">Max + Dolby Atmos (Hi-Res up to 192 kHz)</option>
+            <option value="HIRES">Max (Hi-Res up to 192 kHz, no Atmos)</option>
+            <option value="LOSSLESS">Lossless 16-bit / 44.1 kHz FLAC</option>
+            <option value="HIGH">High (AAC 320 kbps)</option>
+            <option value="LOW">Low (AAC 96 kbps)</option>
+          </select>
+        </div>
+        <div>
+          <label for="vquality">Music video quality</label>
+          <select id="vquality">
+            <option value="HIGH">High (1080p)</option>
+            <option value="MEDIUM">Medium (720p)</option>
+            <option value="LOW">Low (480p)</option>
+          </select>
+        </div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="exactQuality"><span>Exact quality only (skip tracks with no Hi-Res / Atmos copy instead of falling back)</span></label>
+      <label class="toggle"><input type="checkbox" id="hideExplicit"><span>Hide explicit content</span></label>
+      <label class="toggle"><input type="checkbox" id="videos"><span>List music videos in search results (entries start with “[Video]”)</span></label>
+      <div style="margin-top:10px"><button id="saveBtn">Save configuration</button></div>
+      <div id="saveMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Backend status</h2>
+      <p class="hint">Live reachability of every configured backend.</p>
+      <button class="small" id="statusBtn">Refresh</button>
+      <div id="statusBody" style="margin-top:12px; overflow-x:auto"></div>
+    </div>
+
+    <div class="card">
+      <h2>Search &amp; stream tester</h2>
+      <p class="hint">Runs the exact pipeline BitChord uses, so you can confirm results, quality and playability before touching the app.</p>
+      <div class="tester-actions">
+        <input type="text" id="q" placeholder="e.g. daft punk" style="flex:1 1 220px">
+        <button id="searchBtn">Search</button>
+      </div>
+      <div id="searchMsg" class="msg"></div>
+      <div id="results" style="margin-top:12px; overflow-x:auto"></div>
+    </div>
+
+    <footer>Bitdo · self-hosted BitChord addon · quality tiers map to Tido settings and hifi-api playback qualities</footer>
+  </div>
+</div>
+
+<script>
+'use strict';
+var $ = function (id) { return document.getElementById(id); };
+var session = null;
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+  opts.credentials = 'same-origin';
+  if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
+  return fetch('/setup/api/' + path, opts).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (j) {
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    });
+  });
+}
+
+function showMsg(el, text, ok) {
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = text;
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// ---- login ----
+function tryLogin() {
+  var pw = $('pw').value;
+  if (!pw) return;
+  api('login', { method: 'POST', body: { password: pw } })
+    .then(function () { session = true; loadDash(); })
+    .catch(function (e) { showMsg($('loginMsg'), e.message, false); });
+}
+$('loginBtn').addEventListener('click', tryLogin);
+$('pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') tryLogin(); });
+
+$('logoutBtn').addEventListener('click', function () {
+  api('logout', { method: 'POST' }).finally(function () { location.reload(); });
+});
+
+// ---- dashboard ----
+function loadDash() {
+  api('config').then(function (d) {
+    var c = d.config;
+    session = true;
+    $('login').classList.add('hidden');
+    $('dash').classList.remove('hidden');
+    $('subTitle').textContent = 'v' + d.version + ' · ' + (c.tidoUrl ? 'Tido' : 'no Tido') + (c.hifiApiUrls && c.hifiApiUrls.length ? ' + ' + c.hifiApiUrls.length + ' hifi-api' : '');
+    $('link').textContent = d.link;
+    $('label').value = c.label || '';
+    $('publicUrl').value = c.publicUrl || '';
+    $('tidoUrl').value = c.tidoUrl || '';
+    $('tidoRegenUrl').value = c.tidoRegenUrl || '';
+    $('hifiUrls').value = (c.hifiApiUrls || []).join('\n');
+    $('monoEnabled').checked = c.monoEnabled !== false;
+    $('monoUrl').value = c.monoUrl || 'https://tracks.monochrome.st';
+    $('quality').value = c.audioQuality || 'MAX';
+    $('vquality').value = c.videoQuality || 'HIGH';
+    $('exactQuality').checked = !!c.exactQuality;
+    $('hideExplicit').checked = !!c.hideExplicit;
+    $('videos').checked = !!c.videosInSearch;
+    $('loginHint').textContent = c.hasPassword ? 'Enter the password you set for this page.' : $('loginHint').textContent;
+    refreshStatus();
+  }).catch(function () {
+    // not logged in
+  });
+}
+
+$('saveBtn').addEventListener('click', function () {
+  var patch = {
+    label: $('label').value.trim(),
+    publicUrl: $('publicUrl').value.trim(),
+    tidoUrl: $('tidoUrl').value.trim(),
+    tidoRegenUrl: $('tidoRegenUrl').value.trim(),
+    hifiApiUrls: $('hifiUrls').value.split(/\n+/).map(function (s) { return s.trim(); }).filter(Boolean),
+    monoEnabled: $('monoEnabled').checked,
+    monoUrl: $('monoUrl').value.trim() || 'https://tracks.monochrome.st',
+    audioQuality: $('quality').value,
+    videoQuality: $('vquality').value,
+    exactQuality: $('exactQuality').checked,
+    hideExplicit: $('hideExplicit').checked,
+    videosInSearch: $('videos').checked,
+  };
+  api('config', { method: 'POST', body: patch }).then(function (d) {
+    $('link').textContent = d.link;
+    showMsg($('saveMsg'), 'Saved. The BitChord link updates instantly.', true);
+    refreshStatus();
+  }).catch(function (e) { showMsg($('saveMsg'), e.message, false); });
+});
+
+$('rotateBtn').addEventListener('click', function () {
+  if (!confirm('Rotate the secret? The old BitChord link stops working and you must paste the new one.')) return;
+  api('rotate-secret', { method: 'POST' }).then(function (d) {
+    $('link').textContent = d.link;
+    showMsg($('saveMsg'), 'Secret rotated — update the link in BitChord.', true);
+  }).catch(function (e) { showMsg($('saveMsg'), e.message, false); });
+});
+
+$('regenBtn').addEventListener('click', function () {
+  $('regenBtn').disabled = true;
+  api('regen', { method: 'POST' }).then(function (d) {
+    showMsg($('saveMsg'), d.ok ? 'New Tido manifest generated and adopted.' : ('Regeneration failed: ' + (d.reason || 'unknown')), !!d.ok);
+    if (d.ok) loadDash(); // tidoUrl changed server-side
+    refreshStatus();
+  }).catch(function (e) {
+    showMsg($('saveMsg'), e.message, false);
+  }).then(function () { $('regenBtn').disabled = false; });
+});
+
+$('copyBtn').addEventListener('click', function () {
+  var text = $('link').textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () {
+      $('copyBtn').textContent = 'Copied';
+      setTimeout(function () { $('copyBtn').textContent = 'Copy'; }, 1500);
+    });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  }
+});
+
+// ---- status ----
+function refreshStatus() {
+  api('status').then(function (d) {
+    var rows = (d.checks || []).map(function (c) {
+      var cls = c.ok ? 'ok' : 'down';
+      var state = c.ok ? '<span class="pill good">up</span>' : '<span class="pill bad">' + esc(c.lastError || ('HTTP ' + c.status)).slice(0, 60) + '</span>';
+      if (c.detail) state += '<div class="hint" style="margin-top:4px">' + esc(c.detail) + '</div>';
+      return '<tr><td><span class="status-dot ' + cls + '"></span>' + esc(c.name) + '</td>' +
+        '<td class="hide-sm">' + esc(c.url) + '</td>' +
+        '<td>' + state + '</td>' +
+        '<td class="hide-sm">' + c.tookMs + ' ms</td></tr>';
+    });
+    if (!rows.length) rows = ['<tr><td colspan="4" style="color:var(--muted)">No backends configured yet.</td></tr>'];
+    var ka = d.keepAlive && d.keepAlive.enabled
+      ? '<p class="hint" style="margin-top:10px">Keep-alive self-ping ' + (d.keepAlive.target ? '→ <code>' + esc(d.keepAlive.target) + '</code>' : '') + '</p>'
+      : '';
+    var rg = d.regen
+      ? '<p class="hint" style="margin-top:6px">Tido regen: ' + (d.regen.configured
+          ? 'configured · ' + (d.regen.count > 0 ? d.regen.count + ' regen (' + (d.regen.minutesSinceLast === null ? '' : d.regen.minutesSinceLast + ' min ago, ') + 'last: ' + esc(d.regen.lastResult) + ')' : 'never triggered')
+          : 'not configured') + ' · auto max 1/' + d.regen.autoIntervalMinutes + ' min</p>'
+      : '';
+    $('statusBody').innerHTML = '<table><tr><th>Backend</th><th class="hide-sm">URL</th><th>State</th><th class="hide-sm">Latency</th></tr>' + rows.join('') + '</table>' + ka + rg +
+      '<p class="hint" style="margin-top:8px">Caches: ' + (d.caches ? d.caches.search + ' searches, ' + d.caches.streams + ' streams, ' + d.caches.art + ' artworks' : '') + '</p>';
+  }).catch(function (e) { $('statusBody').textContent = 'Status failed: ' + e.message; });
+}
+$('statusBtn').addEventListener('click', refreshStatus);
+
+// ---- tester ----
+$('searchBtn').addEventListener('click', function () {
+  var q = $('q').value.trim();
+  if (!q) return;
+  $('searchMsg').className = 'msg';
+  $('results').innerHTML = '<p class="hint">Searching…</p>';
+  api('test-search', { method: 'POST', body: { q: q } }).then(function (d) {
+    var head = 'Backend: <b>' + esc(d.backend || 'none') + '</b> · ' + d.tookMs + ' ms · ' + (d.tracks || []).length + ' results' +
+      (d.errors && d.errors.length ? ' · errors: ' + esc(d.errors.map(function (e) { return e.backend + ': ' + e.error; }).join('; ')).slice(0, 200) : '');
+    showMsg($('searchMsg'), head, d.backend ? true : false);
+    var rows = (d.tracks || []).map(function (t) {
+      return '<tr><td>' + (t.artworkURL ? '<img class="artwork" src="' + esc(t.artworkURL) + '" alt="" loading="lazy">' : '') + '</td>' +
+        '<td>' + esc(t.title) + '</td><td class="hide-sm">' + esc(t.artist) + '</td>' +
+        '<td class="hide-sm">' + esc(t.album) + '</td><td>' + esc(t.format) + '</td>' +
+        '<td>' + Math.round((t.duration || 0) / 60) + ':' + String((t.duration || 0) % 60).padStart(2, '0') + '</td>' +
+        '<td><button class="small" data-stream="' + esc(t.id) + '">Stream</button></td></tr>';
+    });
+    if (!rows.length) rows = ['<tr><td colspan="7" style="color:var(--muted)">No results — check backend status above.</td></tr>'];
+    $('results').innerHTML = '<table><tr><th></th><th>Title</th><th class="hide-sm">Artist</th><th class="hide-sm">Album</th><th>Format</th><th>Length</th><th></th></tr>' + rows.join('') + '</table>';
+    Array.prototype.forEach.call(document.querySelectorAll('[data-stream]'), function (btn) {
+      btn.addEventListener('click', function () {
+        var cell = btn.parentElement;
+        cell.textContent = '…';
+        api('test-stream', { method: 'POST', body: { id: btn.getAttribute('data-stream') } }).then(function (s) {
+          var d2 = s.descriptor || {};
+          cell.innerHTML = '<span class="pill ' + (s.headStatus === 200 ? 'good' : 'bad') + '">' + (s.headStatus === 200 ? 'plays' : (s.headStatus ? 'HTTP ' + s.headStatus : 'link')) + '</span>';
+          cell.title = d2.quality + ' · ' + d2.codec + '/' + d2.container + (d2.sampleRate ? ' · ' + d2.sampleRate + ' Hz' : '') + (d2.bitDepth ? ' · ' + d2.bitDepth + '-bit' : '');
+          var info = cell.title;
+          if (d2.manifest === 'dash' || d2.manifest === 'hls') info += ' · ' + d2.manifest + ' manifest (player-side)';
+          showMsg($('searchMsg'), 'Stream ' + (btn.getAttribute('data-stream')) + ' → ' + info + (s.headStatus === 200 ? ' · upstream HEAD OK' : (s.headStatus ? ' · upstream HEAD ' + s.headStatus : '')), s.headStatus === 200);
+        }).catch(function (e) {
+          cell.innerHTML = '<span class="pill bad">fail</span>';
+          showMsg($('searchMsg'), 'Stream failed: ' + e.message, false);
+        });
+      });
+    });
+  }).catch(function (e) {
+    showMsg($('searchMsg'), 'Search failed: ' + e.message, false);
+    $('results').innerHTML = '';
+  });
+});
+
+loadDash();
+</script>
+</body>
+</html>

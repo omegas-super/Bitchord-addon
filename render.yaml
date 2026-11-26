@@ -1,0 +1,38 @@
+# One-click deploy to Render (free tier works).
+# After it boots, open https://<your-app>.onrender.com/setup, set a password,
+# paste your Tido manifest URL and/or hifi-api instance, and copy the
+# BitChord link. Every setting below can also be changed later on /setup.
+services:
+  - type: web
+    name: bitchord-tido-addon
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install --ignore-scripts || true
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Zero npm dependencies, so the build is instant.
+      - key: NODE_VERSION
+        value: 22.11.0
+      - key: LOG_LEVEL
+        value: info
+      # Render injects RENDER_EXTERNAL_URL automatically; the server uses it
+      # for the keep-alive self-ping so the free instance never idles out.
+      - key: KEEP_ALIVE
+        value: "true"
+      - key: KEEP_ALIVE_INTERVAL
+        value: "240"
+      # Optional: pre-seed the configuration (everything is editable on /setup).
+      # - key: TIDO_URL
+      #   value: https://tido.tido.tido.rickyaddons.dpdns.org/<token>/manifest.json
+      # - key: HIFI_API_URLS
+      #   value: https://my-hifi-api.example.com
+      # - key: AUDIO_QUALITY
+      #   value: MAX
+      # - key: SETUP_PASSWORD
+      #   sync: false
+      # Render free has no persistent disk; data/ is ephemeral and the config
+      # is re-seeded from these env vars on each deploy. For persistence,
+      # attach a disk and set DATA_DIR=/data (paid plans).

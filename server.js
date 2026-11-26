@@ -500,6 +500,40 @@ function tidoSettingsParams() {
   return p;
 }
 
+/**
+ * Client headers for Tido requests. The UA deliberately avoids the substring
+ * "bitchord": Tido sits behind Cloudflare's browser-integrity check, which
+ * answers that shape with an HTML error page instead of the app's JSON
+ * (measured 2026-11; "Bitdo/1.0" passes). X-Eclipse-Access is forwarded
+ * verbatim when a signed-in Eclipse client sent one, so Tido can verify the
+ * actual user if it ever starts enforcing the header.
+ */
+function tidoClientHeaders(xea) {
+  const h = { 'user-agent': 'Bitdo/1.0 (+self-hosted Eclipse addon)' };
+  if (xea) h['x-eclipse-access'] = String(xea).slice(0, 2048);
+  return h;
+}
+
+/**
+ * Eclipse-family clients append their app settings as query params on every
+ * request — the same convention Tido's manifest settings describe (quality,
+ * exactQuality, videosEnabled...). Server config is the default; the client's
+ * per-request values win. This is what lets BitChord's own quality setting
+ * drive the addon instead of being ignored.
+ */
+function clientSettings(params, cfg) {
+  const q = params && QUALITIES.includes(params.get('quality')) ? params.get('quality') : cfg.audioQuality;
+  const pick = (name, cfgValue) => {
+    const raw = params ? params.get(name) : null;
+    return raw === null ? cfgValue : raw === 'true';
+  };
+  return {
+    quality: q,
+    exactQuality: pick('exactQuality', !!cfg.exactQuality),
+    videosEnabled: pick('videosEnabled', !!cfg.videosInSearch),
+  };
+}
+
 // --- Tido manifest regeneration --------------------------------------------
 // Tido can mint a fresh manifest via POST /generate?k=<key>. Measured behavior
 // (2026-11): when the whole Tido upstream is down every token 403s "Unavailable"
@@ -512,6 +546,39 @@ const regenState = { busy: false, lastAt: 0, lastResult: '', lastOkUrl: '', coun
 
 function tidoRegenUrl() {
   return String(state.config.tidoRegenUrl || '').trim();
+}
+
+/**
+ * Settings JSON for POST /generate. Measured 2026-11: quality binds per token
+ * when /generate receives a body — posting none makes the fresh manifest fall
+ * back to Tido's own default (we saw MAX rotate down to HIRES that way). The
+ * current link's manifest is re-read first so rotation preserves whatever the
+ * link already carries; local config is the fallback.
+ */
+async function tidoSettingsPayload() {
+  const cfg = state.config;
+  const payload = {
+    quality: cfg.audioQuality,
+    videosEnabled: true, // needed for v{id} video streams
+    videoQuality: cfg.videoQuality,
+    hideExplicit: !!cfg.hideExplicit,
+    importsEnabled: false,
+    artistGridMode: 'off',
+    exactQuality: !!cfg.exactQuality,
+  };
+  const t = tidoTarget();
+  if (t) {
+    try {
+      const res = await fetchJson(`${t.base}/${t.token ? t.token + '/' : ''}manifest.json`,
+        { timeoutMs: 10000, headers: tidoClientHeaders() });
+      const settings = res.status === 200 && res.json && Array.isArray(res.json.settings) ? res.json.settings : [];
+      for (const s of settings) {
+        if (s && s.key && s.key in payload && s.default !== undefined) payload[s.key] = s.default;
+      }
+    } catch { /* keep local defaults */ }
+  }
+  payload.videosEnabled = true; // same reason as tidoSettingsParams()
+  return payload;
 }
 
 /**
@@ -529,7 +596,13 @@ async function regenerateTidoManifest({ manual = false } = {}) {
   }
   regenState.busy = true;
   try {
-    const res = await fetchJson(url, { method: 'POST', timeoutMs: 15000 });
+    const settings = await tidoSettingsPayload();
+    const res = await fetchJson(url, {
+      method: 'POST',
+      timeoutMs: 15000,
+      headers: { 'content-type': 'application/json', ...tidoClientHeaders() },
+      body: JSON.stringify(settings),
+    });
     const manifestUrl = res.json && typeof res.json.manifestUrl === 'string' ? res.json.manifestUrl.trim() : '';
     if (res.status !== 200 || !/^https?:\/\//i.test(manifestUrl)) {
       regenState.lastAt = Date.now();
@@ -547,7 +620,7 @@ async function regenerateTidoManifest({ manual = false } = {}) {
     backends.tido.lastError = '';
     searchCache.clear(); streamCache.clear(); metaCache.clear();
     saveConfig(state.config);
-    info('tido manifest regenerated', { url: redactUrl(manifestUrl), count: regenState.count });
+    info('tido manifest regenerated', { url: redactUrl(manifestUrl), count: regenState.count, quality: settings.quality });
     return { ok: true, url: manifestUrl };
   } catch (e) {
     regenState.lastAt = Date.now();
@@ -559,13 +632,13 @@ async function regenerateTidoManifest({ manual = false } = {}) {
   }
 }
 
-async function tidoSearch(q) {
+async function tidoSearch(q, xea) {
   const t = tidoTarget();
   if (!t) throw new HttpError(503, 'no Tido URL configured');
   const p = tidoSettingsParams();
   p.set('q', q);
   const url = `${t.base}/${t.token ? t.token + '/' : ''}search?${p.toString()}`;
-  const res = await fetchJson(url, { timeoutMs: 12000 });
+  const res = await fetchJson(url, { timeoutMs: 12000, headers: tidoClientHeaders(xea) });
   if (res.status !== 200 || !res.json) {
     throw new HttpError(res.status === 403 ? 503 : 502, `Tido search failed (${res.status})`);
   }
@@ -595,12 +668,12 @@ async function tidoSearch(q) {
   return out;
 }
 
-async function tidoStreamTrack(meta) {
+async function tidoStreamTrack(meta, xea) {
   const t = tidoTarget();
   if (!t) throw new HttpError(503, 'no Tido URL configured');
   const p = tidoSettingsParams();
   const url = `${t.base}/${t.token ? t.token + '/' : ''}stream/${encodeURIComponent(meta.tidoTrackId)}?${p.toString()}`;
-  const res = await fetchJson(url, { timeoutMs: 20000 });
+  const res = await fetchJson(url, { timeoutMs: 20000, headers: tidoClientHeaders(xea) });
   if (res.status !== 200 || !res.json) {
     throw new HttpError(res.status === 404 ? 404 : 502, `Tido stream failed (${res.status})`);
   }
@@ -1085,6 +1158,8 @@ async function monoResolveStream(meta) {
   const rangeTotal = /\/(\d+)$/.exec(contentRange);
   if (rangeTotal) contentLength = parseInt(rangeTotal[1], 10);
 
+  let codec = 'flac';
+  let container = 'flac';
   let sampleRate = 0;
   let bitDepth = 0;
   try {
@@ -1093,6 +1168,19 @@ async function monoResolveStream(meta) {
     if (info) {
       sampleRate = info.sampleRate;
       bitDepth = info.bitDepth;
+    } else {
+      // Not FLAC: sniff the container from the magic bytes so the labels and
+      // the /file Content-Type stay honest (the real monochrome serves FLAC
+      // today, but never hardcode that assumption).
+      const head = buf.subarray(0, 12);
+      if (head.length >= 8 && head.subarray(4, 8).toString('latin1') === 'ftyp') {
+        codec = 'aac';
+        container = 'm4a';
+      } else if (head.length >= 3 && (head.subarray(0, 3).toString('latin1') === 'ID3'
+        || (head[0] === 0xff && (head[1] & 0xe0) === 0xe0))) {
+        codec = 'mpeg';
+        container = 'mp3';
+      }
     }
   } catch { /* labels stay 0 */ }
 
@@ -1102,13 +1190,15 @@ async function monoResolveStream(meta) {
     upstreamUrl: url,
     url,
     manifest: 'none',
-    codec: 'flac',
-    container: 'flac',
+    codec,
+    container,
     sampleRate,
     bitDepth,
     bitrate,
-    quality: qualityText('flac', sampleRate, bitDepth),
-    tier: 'LOSSLESS',
+    quality: codec === 'flac'
+      ? qualityText('flac', sampleRate, bitDepth)
+      : (bitrate ? `${Math.round(bitrate / 1000)}kbps` : codec),
+    tier: codec === 'flac' ? 'LOSSLESS' : 'HIGH',
   };
 }
 
@@ -1165,9 +1255,10 @@ function noteBackendSuccess(entry) {
  * Search across backends; first healthy backend with results wins.
  * Also builds music-video entries when enabled.
  */
-async function searchPipeline(q, { fresh = false } = {}) {
+async function searchPipeline(q, { fresh = false, xea, cs } = {}) {
   const cfg = state.config;
-  const key = `${cfg.audioQuality}|${cfg.hideExplicit ? 1 : 0}|${cfg.videosInSearch ? 1 : 0}|${q.toLowerCase()}`;
+  const eff = cs || { quality: cfg.audioQuality, exactQuality: !!cfg.exactQuality, videosEnabled: !!cfg.videosInSearch };
+  const key = `${eff.quality}|${cfg.hideExplicit ? 1 : 0}|${eff.videosEnabled ? 1 : 0}|${q.toLowerCase()}`;
   if (!fresh) {
     const hit = searchCache.get(key);
     if (hit) return hit;
@@ -1179,7 +1270,7 @@ async function searchPipeline(q, { fresh = false } = {}) {
     if (!backendAlive(entry)) continue;
     try {
       let list;
-      if (entry.type === 'tido') list = await tidoSearch(q);
+      if (entry.type === 'tido') list = await tidoSearch(q, xea);
       else if (entry.type === 'mono') list = await monoSearch(q);
       else list = await hifiSearchTracks(entry.b, q);
       if (list && list.length) {
@@ -1194,7 +1285,7 @@ async function searchPipeline(q, { fresh = false } = {}) {
       errors.push({ backend: nameOf(entry), error: String(e.message || e).slice(0, 200) });
     }
   }
-  const result = { tracks: tracks || [], winner: winner ? nameOf(winner) : null, errors };
+  const result = { tracks: tracks || [], winner: winner ? nameOf(winner) : null, errors, cs: eff };
   searchCache.put(key, result, SEARCH_CACHE_TTL);
   return result;
 }
@@ -1208,6 +1299,7 @@ function nameOf(entry) {
 /** Populate metadata for ids we hand to BitChord and build video entries. */
 async function materializeResults(result) {
   const cfg = state.config;
+  const videosEnabled = result.cs ? result.cs.videosEnabled : !!cfg.videosInSearch;
   const out = [];
   const seen = new Set();
   for (const meta of result.tracks) {
@@ -1217,7 +1309,7 @@ async function materializeResults(result) {
     rememberMeta(id, { ...meta, kind: 'track' });
     out.push({ id, meta });
   }
-  if (cfg.videosInSearch && out.length) {
+  if (videosEnabled && out.length) {
     // Videos as their own searchable entries so BitChord can list & play them.
     const videoEntries = [];
     if (result.winner === 'Tido') {
@@ -1273,10 +1365,17 @@ function queryForVideos(tracks) {
  * others. Returns { url, manifest, codec, container, sampleRate, bitDepth,
  * bitrate, quality, kind, upstreamUrl, expiresAt } or throws HttpError.
  */
-async function resolveStream(id) {
-  const cached = streamCache.get(id);
-  if (cached) return cached;
+async function resolveStream(id, { xea, quality, exactQuality } = {}) {
   const cfg = state.config;
+  const eff = {
+    quality: QUALITIES.includes(quality) ? quality : cfg.audioQuality,
+    exactQuality: exactQuality === undefined ? !!cfg.exactQuality : !!exactQuality,
+  };
+  // Cache per effective quality: BitChord can re-request the same track at a
+  // different app setting and must not be served the stale rung's answer.
+  const cacheKey = `${id}|${eff.quality}|${eff.exactQuality ? 1 : 0}`;
+  const cached = streamCache.get(cacheKey);
+  if (cached) return cached;
   let meta = metaCache.get(id);
   if (!meta) {
     // unknown id: BitChord may send an id from an older session. Numeric ids
@@ -1310,12 +1409,12 @@ async function resolveStream(id) {
     if (entry.type === 'mono' && (!state.config.monoEnabled || !meta.monoTrackId)) continue;
     try {
       const resolved = wantVideo
-        ? await resolveVideoVia(entry, meta)
-        : await resolveAudioVia(entry, meta, cfg);
+        ? await resolveVideoVia(entry, meta, xea)
+        : await resolveAudioVia(entry, meta, eff, xea);
       if (resolved) {
         noteBackendSuccess(entry);
-        const info = { ...resolved, id, kind: wantVideo ? 'video' : 'audio', resolvedAt: Date.now() };
-        streamCache.put(id, info, STREAM_CACHE_TTL);
+        const info = { ...resolved, id, kind: wantVideo ? 'video' : 'audio', eff, cacheKey, resolvedAt: Date.now() };
+        streamCache.put(cacheKey, info, STREAM_CACHE_TTL);
         return info;
       }
       errors.push({ backend: nameOf(entry), error: 'no stream' });
@@ -1329,9 +1428,9 @@ async function resolveStream(id) {
   throw new HttpError(502, 'stream resolution failed on every backend', { errors });
 }
 
-async function resolveAudioVia(entry, meta, cfg) {
+async function resolveAudioVia(entry, meta, eff, xea) {
   if (entry.type === 'tido') {
-    const stream = await tidoStreamTrack(meta);
+    const stream = await tidoStreamTrack(meta, xea);
     return tidoStreamToInfo(stream);
   }
   if (entry.type === 'mono') {
@@ -1340,8 +1439,8 @@ async function resolveAudioVia(entry, meta, cfg) {
   const b = entry.b;
   const tidalId = numericTidalId(meta);
   if (!tidalId) return null;
-  const ladder = HIFI_QUALITY_LADDERS[cfg.audioQuality] || HIFI_QUALITY_LADDERS.MAX;
-  const tiers = cfg.exactQuality ? [ladder[0]] : ladder;
+  const ladder = HIFI_QUALITY_LADDERS[eff.quality] || HIFI_QUALITY_LADDERS.MAX;
+  const tiers = eff.exactQuality ? [ladder[0]] : ladder;
   for (const tier of tiers) {
     try {
       const resolved = await hifiResolveTier(b, tidalId, tier, tier === 'ATMOS');
@@ -1354,10 +1453,10 @@ async function resolveAudioVia(entry, meta, cfg) {
   return null;
 }
 
-async function resolveVideoVia(entry, meta) {
+async function resolveVideoVia(entry, meta, xea) {
   if (entry.type === 'tido') {
     // Tido attaches the official video to the track's stream response.
-    const stream = await tidoStreamTrack(meta);
+    const stream = await tidoStreamTrack(meta, xea);
     const video = pickTidoVideo(stream);
     if (!video || !video.url) return null;
     return {
@@ -1508,10 +1607,10 @@ function manifestJSON(cfg) {
   };
 }
 
-function trackJSON(base, entry) {
+function trackJSON(base, entry, quality) {
   const { id, meta } = entry;
   const isVideo = id.startsWith('v');
-  const lossless = ['MAX', 'HIRES', 'LOSSLESS'].includes(state.config.audioQuality);
+  const lossless = ['MAX', 'HIRES', 'LOSSLESS'].includes(quality || state.config.audioQuality);
   const out = {
     id,
     title: meta.title,
@@ -1528,8 +1627,16 @@ function trackJSON(base, entry) {
 function streamJSON(base, info) {
   const isVideo = info.kind === 'video';
   const proxied = info.manifest === 'none'; // direct file: serve bytes through /file
+  let url = proxied ? `${base}/file/${info.id}` : info.upstreamUrl;
+  if (proxied && !isVideo && info.eff
+    && (info.eff.quality !== state.config.audioQuality || info.eff.exactQuality !== !!state.config.exactQuality)) {
+    // The /file proxy re-resolves from the id, so a client-quality rung rides
+    // along as query params (the same settings-transport convention the
+    // Eclipse protocol uses everywhere). Default-quality links stay clean.
+    url += `?quality=${encodeURIComponent(info.eff.quality)}&exactQuality=${info.eff.exactQuality}`;
+  }
   return {
-    url: proxied ? `${base}/file/${info.id}` : info.upstreamUrl,
+    url,
     format: info.codec || info.container || '',
     quality: info.quality || (isVideo ? 'video' : ''),
     codec: info.codec || '',
@@ -1569,15 +1676,36 @@ function sendError(res, err) {
 
 const FORWARDED_REQ_HEADERS = ['range', 'if-range'];
 const FORWARDED_RES_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified'];
+// monochrome answers "application/octet-stream" for audio bytes; give
+// BitChord a real audio MIME derived from the sniffed codec instead.
+const AUDIO_MIME = {
+  flac: 'audio/flac', alac: 'audio/mp4', mpeg: 'audio/mpeg', mp3: 'audio/mpeg',
+  aac: 'audio/mp4', mp4: 'audio/mp4', eac3_joc: 'audio/eac3',
+};
+
+/** Effective quality params carried on our own /file links (see streamJSON). */
+function fileLinkEff(req) {
+  try {
+    const u = new URL(req.url, 'http://localhost');
+    const q = u.searchParams.get('quality');
+    const x = u.searchParams.get('exactQuality');
+    if (!q && x === null) return {};
+    return { quality: q || undefined, exactQuality: x === null ? undefined : x === 'true' };
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Byte proxy: streams the resolved upstream URL to BitChord with Range
  * support, re-resolving once if the upstream link has expired.
  */
 async function handleFile(id, req, res) {
+  const eff = fileLinkEff(req);
+  const xea = req.headers['x-eclipse-access'];
   let info;
   try {
-    info = await resolveStream(id);
+    info = await resolveStream(id, { xea, ...eff });
   } catch (e) {
     return sendError(res, e);
   }
@@ -1588,9 +1716,9 @@ async function handleFile(id, req, res) {
   let upstream = await openUpstream(info.upstreamUrl, req);
   if (upstream && [403, 404, 410].includes(upstream.status)) {
     // CDN link probably expired: re-resolve once with a fresh manifest.
-    streamCache.del(id);
+    streamCache.del(info.cacheKey || id);
     try {
-      info = await resolveStream(id);
+      info = await resolveStream(id, { xea, ...eff });
     } catch (e) {
       return sendError(res, e);
     }
@@ -1606,6 +1734,10 @@ async function handleFile(id, req, res) {
   for (const name of FORWARDED_RES_HEADERS) {
     const v = upstream.headers.get(name);
     if (v) res.setHeader(name, v);
+  }
+  const ct = String(res.getHeader('Content-Type') || '');
+  if (info.codec && AUDIO_MIME[info.codec] && (!ct || /octet-stream/i.test(ct))) {
+    res.setHeader('Content-Type', AUDIO_MIME[info.codec]);
   }
   res.setHeader('Cache-Control', 'no-store');
   res.writeHead(upstream.status);
@@ -1711,25 +1843,27 @@ async function handleArt(id, req, res) {
 // Protocol request handlers
 // ---------------------------------------------------------------------------
 
-async function handleSearch(q, req, res, base) {
+async function handleSearch(q, req, res, base, params) {
   const query = String(q || '').trim();
   if (!query) {
     return writeJSON(res, 200, { tracks: [], albums: [], artists: [], playlists: [] });
   }
+  const cs = clientSettings(params, state.config);
   const started = Date.now();
   let result;
   try {
-    result = await searchPipeline(query);
+    result = await searchPipeline(query, { xea: req && req.headers['x-eclipse-access'], cs });
   } catch (e) {
     return sendError(res, e);
   }
   const entries = await materializeResults(result);
-  const tracks = entries.map((e) => trackJSON(base, e));
+  const tracks = entries.map((e) => trackJSON(base, e, cs.quality));
   const logged = [...query].slice(0, LOGGED_QUERY_RUNES).join('');
   info('search', {
     q: query.length > LOGGED_QUERY_RUNES ? logged + '…' : logged,
     returned: tracks.length,
     backend: result.winner || 'none',
+    quality: cs.quality,
     errors: result.errors.length,
     took: `${Date.now() - started}ms`,
   });
@@ -1746,14 +1880,20 @@ async function handleSearch(q, req, res, base) {
   writeJSON(res, 200, body);
 }
 
-async function handleStream(id, req, res, base) {
+async function handleStream(id, req, res, base, params) {
   if (!ID_PATTERN.test(id)) return quiet404(res);
+  const cs = clientSettings(params, state.config);
   const started = Date.now();
   try {
-    const streamInfo = await resolveStream(id);
+    const streamInfo = await resolveStream(id, {
+      xea: req.headers['x-eclipse-access'],
+      quality: cs.quality,
+      exactQuality: cs.exactQuality,
+    });
     const descriptor = streamJSON(base, streamInfo);
     info('stream', {
       id,
+      want: cs.quality,
       quality: descriptor.quality,
       format: descriptor.format,
       manifest: descriptor.manifest,
@@ -2078,10 +2218,10 @@ async function route(req, res) {
     if (secretOk && slugOk) {
       const base = baseLink(req);
       if (rest === 'manifest.json' && method === 'GET') return handleManifest(res, cfg);
-      if (rest === 'search' && method === 'GET') return handleSearch(u.searchParams.get('q'), req, res, base);
+      if (rest === 'search' && method === 'GET') return handleSearch(u.searchParams.get('q'), req, res, base, u.searchParams);
       if (rest === 'sync' && (method === 'POST' || method === 'GET')) return handleSync(res);
       const streamMatch = /^stream\/([0-9A-Za-z_-]{1,128})$/.exec(rest);
-      if (streamMatch && method === 'GET') return handleStream(streamMatch[1], req, res, base);
+      if (streamMatch && method === 'GET') return handleStream(streamMatch[1], req, res, base, u.searchParams);
       const fileMatch = /^file\/([0-9A-Za-z_-]{1,128})$/.exec(rest);
       if (fileMatch && (method === 'GET' || req.method === 'HEAD')) return handleFile(fileMatch[1], req, res);
       const artMatch = /^art\/([0-9A-Za-z_-]{1,128})$/.exec(rest);
